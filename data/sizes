@@ -1,0 +1,26 @@
+ca_ancora 332877
+cs_pcedt 935568
+cs_pdt 653720
+cu_proiel 47853
+de_parcorfull 8649
+de_potsdamcc 26677
+en_gum 164020
+en_litbank 168247
+en_parcorfull 8765
+es_ancora 366903
+fr_democrat 228100
+grc_proiel 56131
+hbo_ptnk 7727
+hu_korkor 19457
+hu_szegedkoref 100508
+lt_lcc 30082
+no_bokmaalnarc 203220
+no_nynorsknarc 172764
+pl_pcc 431618
+ru_rucor 123599
+tr_itcc 45125
+
+#s = [332877, 935568, 653720, 47853, 8649, 26677, 164020, 168247, 8765, 366903, 228100, 56131, 7727, 19457, 100508, 30082, 203220, 172764, 431618, 123599, 45125]
+#ssqrt = np.sqrt(s/np.sum(s)); np.round(ssqrt/np.sum(ssqrt)*100, 1)
+tb="ca_ancora cs_pcedt cs_pdt cu_proiel de_parcorfull de_potsdamcc en_gum en_litbank en_parcorfull es_ancora fr_democrat grc_proiel hbo_ptnk hu_korkor hu_szegedkoref lt_lcc no_bokmaalnarc no_nynorsknarc pl_pcc ru_rucor tr_itcc"
+ratios_sqrt="7.3 12.3 10.3 2.8 1.2 2.1 5.2 5.2 1.2 7.7 6.1 3.0 1.1 1.8 4.0 2.2 5.7 5.3 8.4 4.5 2.7"
