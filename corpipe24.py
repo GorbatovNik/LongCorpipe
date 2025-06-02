@@ -11,11 +11,6 @@
 
 from __future__ import annotations
 
-from clusterer import merge_clusters, check_if_propn
-from collections import defaultdict, Counter
-from dataclasses import dataclass
-from typing import Tuple
-
 import argparse
 import contextlib
 import copy
@@ -25,8 +20,13 @@ import json
 import math
 import os
 import pymorphy2
-import shutil
 import re
+import shutil
+from collections import defaultdict, Counter
+from dataclasses import dataclass
+from typing import Tuple
+
+from clusterer import merge_clusters
 
 morph = pymorphy2.MorphAnalyzer()
 
@@ -56,6 +56,7 @@ parser.add_argument("--treebanks", default=[], nargs="+", type=str, help="Data."
 parser.add_argument("--treebank_id", default=False, action="store_true", help="Use treebank id.")
 parser.add_argument("--zeros_per_parent", default=2, type=int, help="Zeros per parent.")
 
+
 class Dataset:
     TOKEN_EMPTY = "[TOKEN_EMPTY]"
     TOKEN_CLS = "[TOKEN_CLS]"
@@ -68,7 +69,7 @@ class Dataset:
         self._sep = tokenizer.sep_token_id if tokenizer.sep_token_id is not None else tokenizer.eos_token_id
         self._path = path
         self._treebank_token = []
-        if treebank_id: # 0 is deliberately considered as no treebank id
+        if treebank_id:  # 0 is deliberately considered as no treebank id
             treebank_token = tokenizer.vocab[self.TOKEN_TREEBANK.format(treebank_id - 1)]
             if self._cls is None:
                 self._cls = treebank_token
@@ -101,23 +102,29 @@ class Dataset:
                     span = [word for word in mention.words if not word.is_empty()]
                     start = end = span.index(mention.head)
                     while start > 0 and span[start - 1].ord + 1 == span[start].ord: start -= 1
-                    while end < len(span) - 1 and span[end].ord + 1== span[end + 1].ord: end += 1
-                    dense_mentions.append(((span[start].ord - 1, span[end].ord - 1), mention.entity.eid, start > 0 or end + 1 < len(span)))
-                dense_mentions = sorted(dense_mentions, key=lambda x:(x[0][0], -x[0][1], x[2]))
+                    while end < len(span) - 1 and span[end].ord + 1 == span[end + 1].ord: end += 1
+                    dense_mentions.append(((span[start].ord - 1, span[end].ord - 1), mention.entity.eid,
+                                           start > 0 or end + 1 < len(span)))
+                dense_mentions = sorted(dense_mentions, key=lambda x: (x[0][0], -x[0][1], x[2]))
 
                 mentions = []
                 for i, mention in enumerate(dense_mentions):
-                    if i and dense_mentions[i-1][0] == mention[0]:
-                        print(f"Multiple same mentions {mention[2]}/{dense_mentions[i-1][2]} in sent_id {tree.sent_id}: {tree.get_sentence()}", flush=True)
+                    if i and dense_mentions[i - 1][0] == mention[0]:
+                        print(
+                            f"Multiple same mentions {mention[2]}/{dense_mentions[i - 1][2]} in sent_id {tree.sent_id}: {tree.get_sentence()}",
+                            flush=True)
                         continue
                     mentions.append((mention[0][0], mention[0][1], mention[1]))
 
                 zero_mentions = []
                 for mention in [mention for mention in coref_mentions if mention.head.is_empty()]:
                     if len(mention.words) > 1:
-                        print(f"A empty-node-head mention with multiple words {mention.words} in sent_id {tree.sent_id}: {tree.get_sentence()}", flush=True)
+                        print(
+                            f"A empty-node-head mention with multiple words {mention.words} in sent_id {tree.sent_id}: {tree.get_sentence()}",
+                            flush=True)
                     assert len(mention.head.deps) >= 1
-                    zero_mentions.append((mention.head.deps[0]["parent"].ord - 1, mention.head.deps[0]["deprel"], mention.entity.eid))
+                    zero_mentions.append(
+                        (mention.head.deps[0]["parent"].ord - 1, mention.head.deps[0]["deprel"], mention.entity.eid))
                 zero_mentions = sorted(zero_mentions)
                 new_doc.append((words, mentions, zero_mentions))
             if new_doc:
@@ -137,7 +144,8 @@ class Dataset:
                     word = (" " if "robeczech" in tokenizer.name_or_path else "") + words[i]
                     subword = tokenizer.encode(word, add_special_tokens=False)
                     assert len(subword) > 0
-                    if subword[0] == 6 and "xlm-r" in tokenizer.name_or_path: # Hack: remove the space-only token in XLM-R
+                    if subword[
+                        0] == 6 and "xlm-r" in tokenizer.name_or_path:  # Hack: remove the space-only token in XLM-R
                         subword = subword[1:]
                     assert len(subword) > 0
                     subwords.extend(subword)
@@ -147,7 +155,7 @@ class Dataset:
                         for j in reversed(range(len(stack))):
                             start, end, eid = stack[j]
                             if end == i:
-                                tag.append(f"POP:{len(stack)-j}")
+                                tag.append(f"POP:{len(stack) - j}")
                                 subword_mentions.append((start, word_indices[-1], eid))
                                 stack.pop(j)
                         while mentions and mentions[0][0] == i:
@@ -161,7 +169,7 @@ class Dataset:
                 for parent, deprel, eid in zero_mentions:
                     word_zdeprels[parent].append(deprel)
                     subword_mentions.append((word_indices[parent], -len(word_zdeprels[parent]), eid))
-                subword_mentions = sorted(subword_mentions, key=lambda x:(x[0], -x[1]))
+                subword_mentions = sorted(subword_mentions, key=lambda x: (x[0], -x[1]))
                 new_doc.append((subwords, word_indices, word_tags, word_zdeprels, subword_mentions))
             self.docs.append(new_doc)
 
@@ -202,7 +210,8 @@ class Dataset:
                 allowed[i, j] = i_depth == j_depth
         return allowed
 
-    def pipeline(self, tags_map: dict[str, int], zdeprels_map: dict[str, int], train: bool, args: argparse.Namespace) -> tf.data.Dataset:
+    def pipeline(self, tags_map: dict[str, int], zdeprels_map: dict[str, int], train: bool,
+                 args: argparse.Namespace) -> tf.data.Dataset:
         def generator():
             tid = len(self._treebank_token)
             for doc in self.docs:
@@ -217,7 +226,8 @@ class Dataset:
                         right_reserve = min((args.segment - 4 - tid - len(subwords)) // 2, args.right or 0)
                         context = min(args.segment - 4 - tid - len(subwords) - right_reserve, len(p_subwords))
                         word_indices = [context + 2 + tid + i for i in word_indices + [len(subwords)]]
-                        e_subwords = [self._cls, *self._treebank_token, *p_subwords[-context:], self._sep, *subwords, self._sep]
+                        e_subwords = [self._cls, *self._treebank_token, *p_subwords[-context:], self._sep, *subwords,
+                                      self._sep]
                         if args.right is not None:
                             i = doc_i + 1
                             while i < len(doc) and len(e_subwords) + 1 < args.segment:
@@ -229,17 +239,20 @@ class Dataset:
 
                         yield output
 
-                    p_subword_mentions.extend((s + len(p_subwords), e if e < 0 else e + len(p_subwords), eid) for s, e, eid in subword_mentions)
+                    p_subword_mentions.extend(
+                        (s + len(p_subwords), e if e < 0 else e + len(p_subwords), eid) for s, e, eid in
+                        subword_mentions)
                     p_subwords.extend(subwords)
 
-        output_signature=(tf.TensorSpec([None], tf.int32), tf.TensorSpec([None], tf.int32))
+        output_signature = (tf.TensorSpec([None], tf.int32), tf.TensorSpec([None], tf.int32))
 
         pipeline = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
         pipeline = pipeline.cache()
         pipeline = pipeline.apply(tf.data.experimental.assert_cardinality(sum(1 for _ in pipeline)))
         return pipeline
 
-    def save_mentions(self, path: str, mentions: list[list[tuple[int, int, int]]]): #, zero_mentions: list[list[tuple[int, str, int]]]) -> None:
+    def save_mentions(self, path: str, mentions: list[
+        list[tuple[int, int, int]]]):  # , zero_mentions: list[list[tuple[int, str, int]]]) -> None:
         doc = udapi.block.read.conllu.Conllu(files=[self._path]).read_documents()[0]
         udapi.block.corefud.removemisc.RemoveMisc(attrnames="Entity,SplitAnte,Bridge").apply_on_document(doc)
         entities = {}
@@ -255,8 +268,8 @@ class Dataset:
                 parent, deprel, eid = mention.begin, mention.zdeprel, mention.cluster
                 tree.create_empty_child()
                 ords[parent] = ords.get(parent, 0) + 1
-                tree.empty_nodes[-1].ord = f"{parent+1}.{ords[parent]}"
-                tree.empty_nodes[-1].raw_deps = f"{parent+1}:{deprel}"
+                tree.empty_nodes[-1].ord = f"{parent + 1}.{ords[parent]}"
+                tree.empty_nodes[-1].raw_deps = f"{parent + 1}:{deprel}"
                 if not eid in entities:
                     entities[eid] = udapi.core.coref.CorefEntity(f"c{eid}")
                 udapi.core.coref.CorefMention([tree.empty_nodes[-1]], entity=entities[eid])
@@ -267,7 +280,8 @@ class Dataset:
                 start, end, eid = mention.begin, mention.end, mention.cluster
                 if not eid in entities:
                     entities[eid] = udapi.core.coref.CorefEntity(f"c{eid}")
-                udapi.core.coref.CorefMention([node for node in nodes if start <= node.ord - 1 <= end], entity=entities[eid])
+                udapi.core.coref.CorefMention([node for node in nodes if start <= node.ord - 1 <= end],
+                                              entity=entities[eid])
         doc._eid_to_entity = {entity._eid: entity for entity in sorted(entities.values())}
         udapi.block.corefud.movehead.MoveHead(bugs='ignore').apply_on_document(doc)
         udapi.block.write.conllu.Conllu(files=[path]).apply_on_document(doc)
@@ -287,58 +301,75 @@ class Dataset:
         udapi.block.corefud.movehead.MoveHead(bugs='ignore').apply_on_document(doc)
         udapi.block.write.conllu.Conllu(files=[path]).apply_on_document(doc)
 
+
 @dataclass
 class Mention:
-    sent_id : int
-    begin   : int # word index in sentence
-    end     : int # inclusive
-    info    : list[Tuple[str, str, str]]
-    cluster : int | None = None
+    sent_id: int
+    begin: int  # first token index in sentence
+    end: int  # last token index in sentence (inclusive)
+    info: list[Tuple[str, str, str]]
+    cluster: int | None = None
+
+
 class ZeroMention(Mention):
-    zdeprel : str
+    zdeprel: str
+
 
 class Model(tf.keras.Model):
-    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, tags: list[str], zdeprels: list[str], args: argparse.Namespace) -> None:
+    def __init__(self, tokenizer: transformers.PreTrainedTokenizer, tags: list[str], zdeprels: list[str],
+                 args: argparse.Namespace) -> None:
         super().__init__()
         self._tags = tags
         self._zdeprels = zdeprels
         self._args = args
         self._tokenizer = tokenizer
 
-        assert tags[0] == "" # Used as a boundary tag in CRF
+        assert tags[0] == ""  # Used as a boundary tag in CRF
         self._allowed_tag_transitions = tf.constant(Dataset.allowed_tag_transitions(tags, args.depth + 1))
         self._boundary_logits = tf.cast(tf.range(self._allowed_tag_transitions.shape[0]) > 0, tf.float32) * -1e6
 
         self._encoder = transformers.TFMT5EncoderModel if "mt5" in args.encoder.lower() else transformers.TFAutoModel
         if not args.load:
             self._encoder = self._encoder.from_pretrained(
-                args.encoder, from_pt=any(m in args.encoder.lower() for m in ["rubert", "herbert", "flaubert", "litlat", "roberta-base-ca", "spanbert", "xlm-v", "infoxlm"]))
+                args.encoder, from_pt=any(m in args.encoder.lower() for m in
+                                          ["rubert", "herbert", "flaubert", "litlat", "roberta-base-ca", "spanbert",
+                                           "xlm-v", "infoxlm"]))
         else:
             self._encoder = self._encoder.from_config(transformers.AutoConfig.from_pretrained(args.encoder))
             self._encoder(tf.constant([[0]], dtype=tf.int32), attention_mask=tf.constant([[1.]], dtype=tf.float32))
         self._encoder.resize_token_embeddings(len(tokenizer.vocab))
-        self._dense_hidden_q = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu, name="dense_hidden_q")
-        self._dense_hidden_k = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu, name="dense_hidden_k")
-        self._dense_hidden_tags = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu, name="dense_hidden_tags")
+        self._dense_hidden_q = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu,
+                                                     name="dense_hidden_q")
+        self._dense_hidden_k = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu,
+                                                     name="dense_hidden_k")
+        self._dense_hidden_tags = tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu,
+                                                        name="dense_hidden_tags")
         self._dense_q = tf.keras.layers.Dense(self._encoder.config.hidden_size, use_bias=False, name="dens_q")
         self._dense_k = tf.keras.layers.Dense(self._encoder.config.hidden_size, use_bias=False, name="dens_k")
         self._dense_tags = tf.keras.layers.Dense(len(tags), name="dense_tags")
         self._dense_hidden_zeros = [
-            tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu, name=f"dense_hidden_zeros_{i}") for i in range(args.zeros_per_parent)]
-        self._dense_zeros = [tf.keras.layers.Dense(self._encoder.config.hidden_size, name=f"dense_zeros_{i}") for i in range(args.zeros_per_parent)]
+            tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu,
+                                  name=f"dense_hidden_zeros_{i}") for i in range(args.zeros_per_parent)]
+        self._dense_zeros = [tf.keras.layers.Dense(self._encoder.config.hidden_size, name=f"dense_zeros_{i}") for i in
+                             range(args.zeros_per_parent)]
         self._dense_hidden_zdeprels = [
-            tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu, name=f"dense_hidden_zdeprels_{i}") for i in range(args.zeros_per_parent)]
-        self._dense_zdeprels = [tf.keras.layers.Dense(len(zdeprels), name=f"dense_zdeprels_{i}") for i in range(args.zeros_per_parent)]
+            tf.keras.layers.Dense(4 * self._encoder.config.hidden_size, activation=tf.nn.relu,
+                                  name=f"dense_hidden_zdeprels_{i}") for i in range(args.zeros_per_parent)]
+        self._dense_zdeprels = [tf.keras.layers.Dense(len(zdeprels), name=f"dense_zdeprels_{i}") for i in
+                                range(args.zeros_per_parent)]
 
         if args.load:
             self.compute_tags(tf.ragged.constant([[0]]), tf.ragged.constant([[0]]))
-            self.compute_antecedents(tf.zeros([1, 1, self._encoder.config.hidden_size]), tf.zeros([1, args.zeros_per_parent, self._encoder.config.hidden_size]),
-                                     *[tf.ragged.constant([[[0, 0]]], dtype=tf.int32, ragged_rank=1, inner_shape=(2,))] * 2)
+            self.compute_antecedents(tf.zeros([1, 1, self._encoder.config.hidden_size]),
+                                     tf.zeros([1, args.zeros_per_parent, self._encoder.config.hidden_size]),
+                                     *[tf.ragged.constant([[[0, 0]]], dtype=tf.int32, ragged_rank=1,
+                                                          inner_shape=(2,))] * 2)
             self.built = True
             self.load_weights(args.load[0])
 
     def crf_decode(self, logits: tf.RaggedTensor, crf_weights: tf.Tensor) -> tf.RaggedTensor:
-        boundary_logits = tf.broadcast_to(self._boundary_logits, [logits.bounding_shape(0), 1, len(self._boundary_logits)])
+        boundary_logits = tf.broadcast_to(self._boundary_logits,
+                                          [logits.bounding_shape(0), 1, len(self._boundary_logits)])
         logits = tf.concat([boundary_logits, logits, boundary_logits], axis=1)
         predictions, _ = tfa.text.crf_decode(logits.to_tensor(), crf_weights, logits.row_lengths())
         predictions = tf.RaggedTensor.from_tensor(predictions, logits.row_lengths())
@@ -346,9 +377,11 @@ class Model(tf.keras.Model):
         return predictions
 
     @tf.function(experimental_relax_shapes=True)
-    def compute_tags(self, subwords, word_indices, training=False) -> tuple[tf.RaggedTensor, tf.RaggedTensor, tf.RaggedTensor, tf.RaggedTensor]:
+    def compute_tags(self, subwords, word_indices, training=False) -> tuple[
+        tf.RaggedTensor, tf.RaggedTensor, tf.RaggedTensor, tf.RaggedTensor]:
         if training or subwords.bounding_shape(0) > 0:
-            embeddings = self._encoder(subwords.to_tensor(), attention_mask=tf.sequence_mask(subwords.row_lengths(), dtype=tf.float32),
+            embeddings = self._encoder(subwords.to_tensor(),
+                                       attention_mask=tf.sequence_mask(subwords.row_lengths(), dtype=tf.float32),
                                        training=training).last_hidden_state
         else:
             # During prediction, we need to correctly handle batches of size 0 when using multiple GPUs
@@ -358,17 +391,21 @@ class Model(tf.keras.Model):
 
         zero_embeddings = []
         for i in range(self._args.zeros_per_parent):
-            zero_embeddings.append(self._dense_zeros[i](self._dense_hidden_zeros[i](tf.concat([embeddings] + zero_embeddings, axis=-1))))
+            zero_embeddings.append(
+                self._dense_zeros[i](self._dense_hidden_zeros[i](tf.concat([embeddings] + zero_embeddings, axis=-1))))
         zdeprel_logits = []
         for i in range(self._args.zeros_per_parent):
-            zdeprel_logits.append(self._dense_zdeprels[i](self._dense_hidden_zdeprels[i](tf.gather(zero_embeddings[i], word_indices[:, :-1], batch_dims=1))))
+            zdeprel_logits.append(self._dense_zdeprels[i](
+                self._dense_hidden_zdeprels[i](tf.gather(zero_embeddings[i], word_indices[:, :-1], batch_dims=1))))
         return embeddings, tf.concat(zero_embeddings, axis=1), tag_logits, tf.stack(zdeprel_logits, axis=-2)
 
     @tf.function(experimental_relax_shapes=True)
     def compute_antecedents(self, embeddings, zero_embeddings, previous, mentions) -> tf.RaggedTensor:
         mentions_embedded = tf.gather(embeddings, tf.math.maximum(mentions, 0), batch_dims=1).values
         mentions_embedded = tf.reshape(mentions_embedded, [-1, np.prod(mentions_embedded.shape[-2:])])
-        zero_mentions_embedded = tf.gather(zero_embeddings, self._args.zeros_per_parent * mentions[..., 0] + tf.math.maximum(-mentions[..., 1] - 1, 0), batch_dims=1).values
+        zero_mentions_embedded = tf.gather(zero_embeddings,
+                                           self._args.zeros_per_parent * mentions[..., 0] + tf.math.maximum(
+                                               -mentions[..., 1] - 1, 0), batch_dims=1).values
         zero_mentions_embedded = tf.tile(zero_mentions_embedded, [1, 2])
         mentions_embedded = tf.where(mentions[..., 1:].values >= 0, mentions_embedded, zero_mentions_embedded)
         queries = mentions.with_values(self._dense_q(self._dense_hidden_q(mentions_embedded)))
@@ -376,7 +413,9 @@ class Model(tf.keras.Model):
 
         previous_embedded = tf.gather(embeddings, tf.math.maximum(previous, 0), batch_dims=1).values
         previous_embedded = tf.reshape(previous_embedded, [-1, mentions_embedded.shape[-1]])
-        zero_previous_embedded = tf.gather(zero_embeddings, self._args.zeros_per_parent * previous[..., 0] + tf.math.maximum(-previous[..., 1] - 1, 0), batch_dims=1).values
+        zero_previous_embedded = tf.gather(zero_embeddings,
+                                           self._args.zeros_per_parent * previous[..., 0] + tf.math.maximum(
+                                               -previous[..., 1] - 1, 0), batch_dims=1).values
         zero_previous_embedded = tf.tile(zero_previous_embedded, [1, 2])
         previous_embedded = tf.where(previous[..., 1:].values >= 0, previous_embedded, zero_previous_embedded)
         keys_previous = previous.with_values(self._dense_k(self._dense_hidden_k(previous_embedded)))
@@ -391,7 +430,7 @@ class Model(tf.keras.Model):
     #     doc_mentions, doc_subwords, sent_id = [], 0, 0
     #     for b_subwords, b_word_indices in pipeline:
     #         b_embeddings, b_zero_embeddings, b_tag_logits, b_zdeprel_logits = self.compute_tags(b_subwords, b_word_indices)
-            
+
     #         b_size = b_word_indices.shape[0]
     #         b_tag_logits = b_tag_logits.with_values(tf.math.log_softmax(tf.tile(b_tag_logits.values, [1, self._args.depth + 1]), axis=-1))
     #         b_tags = self.crf_decode(b_tag_logits, (1 - self._allowed_tag_transitions) * -1e6)
@@ -465,7 +504,8 @@ class Model(tf.keras.Model):
 
     #     return results #, results_zeros
 
-    def predict(self, dataset: Dataset, pipeline: tf.data.Dataset) -> tuple[list[list[tuple[int, int, int]]], list[list[tuple[int, str, int]]]]:
+    def predict(self, dataset: Dataset, pipeline: tf.data.Dataset) -> tuple[
+        list[list[tuple[int, int, int]]], list[list[tuple[int, str, int]]]]:
         tid = len(dataset._treebank_token)
 
         results, results_zeros, entities = [], [], 0
@@ -473,9 +513,11 @@ class Model(tf.keras.Model):
         doc_num = -1
         sent_id = 0
         for b_subwords, b_word_indices in pipeline:
-            b_embeddings, b_zero_embeddings, b_tag_logits, b_zdeprel_logits = self.compute_tags(b_subwords, b_word_indices)
+            b_embeddings, b_zero_embeddings, b_tag_logits, b_zdeprel_logits = self.compute_tags(b_subwords,
+                                                                                                b_word_indices)
             b_size = b_word_indices.shape[0]
-            b_tag_logits = b_tag_logits.with_values(tf.math.log_softmax(tf.tile(b_tag_logits.values, [1, self._args.depth + 1]), axis=-1))
+            b_tag_logits = b_tag_logits.with_values(
+                tf.math.log_softmax(tf.tile(b_tag_logits.values, [1, self._args.depth + 1]), axis=-1))
             b_tags = self.crf_decode(b_tag_logits, (1 - self._allowed_tag_transitions) * -1e6)
             b_zdeprels = b_zdeprel_logits.with_values(tf.argmax(b_zdeprel_logits.values, axis=-1))
 
@@ -500,7 +542,8 @@ class Model(tf.keras.Model):
                             if len(stack):
                                 j = len(stack) - (j if j <= len(stack) else 1)
                                 begin, end = stack.pop(j), i
-                                mention_info = [dataset.docs_flu[doc_num][sent_id][tok_id] for tok_id in range(begin, end + 1)]
+                                mention_info = [dataset.docs_flu[doc_num][sent_id][tok_id] for tok_id in
+                                                range(begin, end + 1)]
                                 mentions.append(Mention(sent_id, begin, end, info=mention_info))
                         elif command:
                             raise ValueError(f"Unknown command '{command}'")
@@ -514,32 +557,39 @@ class Model(tf.keras.Model):
                     for j in range(self._args.zeros_per_parent):
                         if zdeprel[j] == Dataset.ZDEPREL_PAD or zdeprel[j] == Dataset.ZDEPREL_NONE:
                             break
-                        mentions.append(ZeroMention(sent_id, i, -j - 1, zdeprel=self._zdeprels[zdeprel[j]], info=[("", "", "PRON")]))
+                        mentions.append(ZeroMention(sent_id, i, -j - 1, zdeprel=self._zdeprels[zdeprel[j]],
+                                                    info=[("", "", "PRON")]))
 
                 # Prepare inputs for antecedent prediction
                 mentions = sorted(mentions, key=lambda x: (x.begin, -x.end))
                 offset = doc_subwords - (word_indices[0] - 2 - tid)
-                results[-1].append([]), results_zeros.append([]), b_previous.append([]), b_mentions.append([]), b_refs.append([])
+                results[-1].append([]), results_zeros.append([]), b_previous.append([]), b_mentions.append(
+                    []), b_refs.append([])
                 for doc_mention in doc_mentions:
                     if doc_mention[0] < offset: continue
-                    b_previous[-1].append([doc_mention[0] - offset + 1 + tid, doc_mention[1] if doc_mention[1] < 0 else doc_mention[1] - offset + 1 + tid])
+                    b_previous[-1].append([doc_mention[0] - offset + 1 + tid,
+                                           doc_mention[1] if doc_mention[1] < 0 else doc_mention[1] - offset + 1 + tid])
                     b_refs[-1].append(doc_mention[2])
                 for mention in mentions:
                     results[-1][-1].append(mention)
                     b_refs[-1].append(mention)
-                    b_mentions[-1].append([word_indices[mention.begin], mention.end if mention.end < 0 else word_indices[mention.end]])
+                    b_mentions[-1].append(
+                        [word_indices[mention.begin], mention.end if mention.end < 0 else word_indices[mention.end]])
                     doc_mentions.append([doc_subwords + word_indices[mention.begin] - word_indices[0],
-                                         mention.end if mention.end < 0 else doc_subwords + word_indices[mention.end] - word_indices[0], mention])
+                                         mention.end if mention.end < 0 else doc_subwords + word_indices[mention.end] -
+                                                                             word_indices[0], mention])
                 doc_subwords += word_indices[-1] - word_indices[0]
                 sent_id += 1
 
             # Decode antecedents
             if sum(len(mentions) for mentions in b_mentions) == 0: continue
             b_antecedents = self.compute_antecedents(
-                b_embeddings, b_zero_embeddings, tf.ragged.constant(b_previous, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)),
+                b_embeddings, b_zero_embeddings,
+                tf.ragged.constant(b_previous, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)),
                 tf.ragged.constant(b_mentions, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)))
             for b in range(b_size):
-                len_prev, mentions, refs, antecedents = len(b_previous[b]), b_mentions[b], b_refs[b], b_antecedents[b].numpy()
+                len_prev, mentions, refs, antecedents = len(b_previous[b]), b_mentions[b], b_refs[b], b_antecedents[
+                    b].numpy()
                 for i in range(len(mentions)):
                     j = i - 1
                     while j >= 0 and mentions[j][0] == mentions[i][0]:
@@ -577,7 +627,7 @@ class Model(tf.keras.Model):
     #                 else:
     #                     submaps[i][mention] = entities
     #                     entities += 1
-        
+
     #     subdocs = [[] for _ in range(len(results))]
     #     for i in range(len(results)):
     #         for mention, cluster in submaps[i].items():
@@ -602,7 +652,7 @@ class Model(tf.keras.Model):
                 #             for j in range(mention[1], mention[2] + 1):
                 #                 form_lemma_upos = dataset.docs_flu[doc_i][mention[0]][j]
                 #                 mention_info.append(form_lemma_upos)
-                        
+
                 #         subdoc[i] = (*mention, mention_info)
                 clusters = merge_clusters(predict)
 
@@ -619,18 +669,20 @@ class Model(tf.keras.Model):
                         #     local_results[ment[0]].append((ment[1], ment[2], cluster_id + cluster_add))
                 cluster_add += len(clusters)
                 for i in range(len(local_results)):
-                    local_results[i] = sorted(local_results[i], key=lambda x: (x.begin, -isinstance(x, ZeroMention), -x.end))
+                    local_results[i] = sorted(local_results[i],
+                                              key=lambda x: (x.begin, -isinstance(x, ZeroMention), -x.end))
                 # for i in range(len(local_zero_results)):
                 #     local_zero_results[i] = sorted(local_zero_results[i])
-                
+
                 results.extend(local_results)
                 # zero_results.extend(local_zero_results)
 
             path = os.path.join(self._args.logdir, f"{os.path.splitext(os.path.basename(dataset._path))[0]}.conllu")
-            dataset.save_mentions(path, results) #, zero_results)
+            dataset.save_mentions(path, results)  # , zero_results)
             # dataset.save_mentions23(path, results)
             if evaluate:
                 os.system(f"run ./corefud-score.sh '{dataset._path}' '{path}'")
+
 
 def main(params: list[str] | None = None) -> None:
     args = parser.parse_args(params)
@@ -658,9 +710,10 @@ def main(params: list[str] | None = None) -> None:
     # Load the data
     tokenizer = transformers.AutoTokenizer.from_pretrained(args.encoder)
     tokenizer.add_special_tokens({"additional_special_tokens": [Dataset.TOKEN_EMPTY] +
-                                  [Dataset.TOKEN_TREEBANK.format(i) for i in range(len(args.treebanks))] +
-                                  ([Dataset.TOKEN_CLS] if tokenizer.cls_token_id is None and not args.treebank_id else [])})
-
+                                                               [Dataset.TOKEN_TREEBANK.format(i) for i in
+                                                                range(len(args.treebanks))] +
+                                                               ([
+                                                                    Dataset.TOKEN_CLS] if tokenizer.cls_token_id is None and not args.treebank_id else [])})
 
     if args.dev and args.treebank_id:
         print("When --treebank_id is set and you pass explicit --dev treebanks, they MUST correspond to --treebanks.")
@@ -685,8 +738,10 @@ def main(params: list[str] | None = None) -> None:
         strategy_scope = tf.distribute.MirroredStrategy().scope()
     with strategy_scope or contextlib.nullcontext():
         # Create pipelines
-        devs = [(dev, dev.pipeline(tags_map, zdeprels_map, False, args).ragged_batch(args.batch_size).prefetch(tf.data.AUTOTUNE)) for dev in devs]
-        tests = [(test, test.pipeline(tags_map, zdeprels_map, False, args).ragged_batch(args.batch_size).prefetch(tf.data.AUTOTUNE)) for test in tests]
+        devs = [(dev, dev.pipeline(tags_map, zdeprels_map, False, args).ragged_batch(args.batch_size).prefetch(
+            tf.data.AUTOTUNE)) for dev in devs]
+        tests = [(test, test.pipeline(tags_map, zdeprels_map, False, args).ragged_batch(args.batch_size).prefetch(
+            tf.data.AUTOTUNE)) for test in tests]
 
         model = Model(tokenizer, tags, zdeprels, args)
 
@@ -696,6 +751,7 @@ def main(params: list[str] | None = None) -> None:
                 model.callback(0, devs, evaluate=True)
             if args.test is not None:
                 model.callback(0, tests, evaluate=False)
+
 
 if __name__ == "__main__":
     main([] if "__file__" not in globals() else None)
