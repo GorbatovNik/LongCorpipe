@@ -11,26 +11,14 @@
 
 from __future__ import annotations
 
-import argparse
-import contextlib
-import copy
-import datetime
-import functools
-import json
-import math
-import os
-import pymorphy2
-import re
-import shutil
-from collections import defaultdict, Counter
+from clusterer import merge_clusters
 from dataclasses import dataclass
 from typing import Tuple
 
-from clusterer import merge_clusters
-
-morph = pymorphy2.MorphAnalyzer()
-
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Report only TF errors by default
+import argparse
+import contextlib
+import json
+import os
 
 import numpy as np
 import tensorflow as tf
@@ -144,8 +132,7 @@ class Dataset:
                     word = (" " if "robeczech" in tokenizer.name_or_path else "") + words[i]
                     subword = tokenizer.encode(word, add_special_tokens=False)
                     assert len(subword) > 0
-                    if subword[
-                        0] == 6 and "xlm-r" in tokenizer.name_or_path:  # Hack: remove the space-only token in XLM-R
+                    if subword[0] == 6 and "xlm-r" in tokenizer.name_or_path: # Hack: remove the space-only token in XLM-R
                         subword = subword[1:]
                     assert len(subword) > 0
                     subwords.extend(subword)
@@ -311,8 +298,9 @@ class Mention:
     cluster: int | None = None
 
 
+@dataclass
 class ZeroMention(Mention):
-    zdeprel: str
+    zdeprel : str = "[NONE]"
 
 
 class Model(tf.keras.Model):
@@ -423,87 +411,6 @@ class Model(tf.keras.Model):
         weights = tf.matmul(queries.to_tensor(), keys.to_tensor(), transpose_b=True) / (self._dense_q.units ** 0.5)
         return weights
 
-    # def predict_best_antecedents(self, dataset: Dataset, pipeline: tf.data.Dataset) -> tuple[list[list[tuple[int, int, int]]], list[list[tuple[int, str, int]]]]:
-    #     tid = len(dataset._treebank_token)
-
-    #     results, results_zeros, entities = [], [], 0
-    #     doc_mentions, doc_subwords, sent_id = [], 0, 0
-    #     for b_subwords, b_word_indices in pipeline:
-    #         b_embeddings, b_zero_embeddings, b_tag_logits, b_zdeprel_logits = self.compute_tags(b_subwords, b_word_indices)
-
-    #         b_size = b_word_indices.shape[0]
-    #         b_tag_logits = b_tag_logits.with_values(tf.math.log_softmax(tf.tile(b_tag_logits.values, [1, self._args.depth + 1]), axis=-1))
-    #         b_tags = self.crf_decode(b_tag_logits, (1 - self._allowed_tag_transitions) * -1e6)
-    #         b_zdeprels = b_zdeprel_logits.with_values(tf.argmax(b_zdeprel_logits.values, axis=-1))
-
-    #         b_previous, b_mentions, b_refs = [], [], []
-    #         for b in range(b_size):
-    #             word_indices, tags, zdeprels = b_word_indices[b].numpy(), b_tags[b].numpy(), b_zdeprels[b].numpy()
-    #             if word_indices[0] == 2 + tid:
-    #                 doc_mentions, doc_subwords, sent_id = [], 0, 0
-
-    #             # Decode mentions
-    #             mentions, stack = [], []
-    #             for i, tag in enumerate(self._tags[tag % len(self._tags)] for tag in tags):
-    #                 for command in tag.split(","):
-    #                     if command == "PUSH":
-    #                         stack.append(i)
-    #                     elif command.startswith("POP:"):
-    #                         j = int(command.removeprefix("POP:"))
-    #                         if len(stack):
-    #                             j = len(stack) - (j if j <= len(stack) else 1)
-    #                             mentions.append((stack.pop(j), i, None))
-    #                     elif command:
-    #                         raise ValueError(f"Unknown command '{command}'")
-    #             while len(stack):
-    #                 mentions.append((stack.pop(), len(tags) - 1, None))
-
-    #             # Decode zero mentions
-    #             for i, zdeprel in enumerate(zdeprels):
-    #                 for j in range(self._args.zeros_per_parent):
-    #                     if zdeprel[j] == Dataset.ZDEPREL_PAD or zdeprel[j] == Dataset.ZDEPREL_NONE:
-    #                         break
-    #                     mentions.append((i, -j - 1, self._zdeprels[zdeprel[j]]))
-
-    #             # Prepare inputs for antecedent prediction
-    #             mentions = sorted(set(mentions), key=lambda x: (x[0], -x[1]))
-    #             offset = doc_subwords - (word_indices[0] - 2 - tid)
-    #             results.append([]), results_zeros.append([]), b_previous.append([]), b_mentions.append([]), b_refs.append([])
-    #             for doc_mention in doc_mentions:
-    #                 if doc_mention[0] < offset: continue
-    #                 b_previous[-1].append([doc_mention[0] - offset + 1 + tid, doc_mention[1] if doc_mention[1] < 0 else doc_mention[1] - offset + 1 + tid])
-    #                 b_refs[-1].append(doc_mention[2])
-    #             for mention in mentions:
-    #                 if mention[2] is not None:
-    #                     result_mention = [mention[0], mention[2], None, sent_id]
-    #                     # results_zeros[-1].append(result_mention)
-    #                 else:
-    #                     result_mention = [mention[0], mention[1], None, sent_id]
-    #                 results[-1].append(result_mention)
-    #                 b_refs[-1].append(result_mention)
-    #                 b_mentions[-1].append([word_indices[mention[0]], mention[1] if mention[1] < 0 else word_indices[mention[1]]])
-    #                 doc_mentions.append([doc_subwords + word_indices[mention[0]] - word_indices[0],
-    #                                      mention[1] if mention[1] < 0 else doc_subwords + word_indices[mention[1]] - word_indices[0], result_mention])
-    #             doc_subwords += word_indices[-1] - word_indices[0]
-    #             sent_id += 1
-
-    #         # Decode antecedents
-    #         if sum(len(mentions) for mentions in b_mentions) == 0: continue
-    #         b_antecedents = self.compute_antecedents(
-    #             b_embeddings, b_zero_embeddings, tf.ragged.constant(b_previous, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)),
-    #             tf.ragged.constant(b_mentions, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)))
-    #         for b in range(b_size):
-    #             len_prev, mentions, refs, antecedents = len(b_previous[b]), b_mentions[b], b_refs[b], b_antecedents[b].numpy()
-    #             for i in range(len(mentions)):
-    #                 j = i - 1
-    #                 while j >= 0 and mentions[j][0] == mentions[i][0]:
-    #                     antecedents[i, j + len_prev] = antecedents[i, i + len_prev] - 1
-    #                     j -= 1
-    #                 j = np.argmax(antecedents[i, :i + len_prev + 1])
-    #                 refs[i + len_prev][2] = refs[j]
-
-    #     return results #, results_zeros
-
     def predict(self, dataset: Dataset, pipeline: tf.data.Dataset) -> tuple[
         list[list[tuple[int, int, int]]], list[list[tuple[int, str, int]]]]:
         tid = len(dataset._treebank_token)
@@ -588,8 +495,7 @@ class Model(tf.keras.Model):
                 tf.ragged.constant(b_previous, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)),
                 tf.ragged.constant(b_mentions, dtype=tf.int32, ragged_rank=1, inner_shape=(2,)))
             for b in range(b_size):
-                len_prev, mentions, refs, antecedents = len(b_previous[b]), b_mentions[b], b_refs[b], b_antecedents[
-                    b].numpy()
+                len_prev, mentions, refs, antecedents = len(b_previous[b]), b_mentions[b], b_refs[b], b_antecedents[b].numpy()
                 for i in range(len(mentions)):
                     j = i - 1
                     while j >= 0 and mentions[j][0] == mentions[i][0]:
@@ -634,54 +540,32 @@ class Model(tf.keras.Model):
     #             subdocs[i].append(mention + (cluster,))
     #     return subdocs
 
-    def callback(self, epoch: int, datasets: list[tuple[Dataset, tf.data.Dataset]], evaluate: bool) -> None:
+    def callback(self, datasets: list[tuple[Dataset, tf.data.Dataset]], evaluate: bool) -> None:
         for dataset, pipeline in datasets:
             predicts = self.predict(dataset, pipeline)
 
-            results, zero_results = [], []
+            results = []
             cluster_add = 0
             for doc_i, predict in enumerate(predicts):
-                # subdocs = self.make_subdocs(predict, soft=True)
-                # subdocs = [[(ment.sent_id, ment.begin, ment.end, ment.cluster) for ment in sent] for sent in predict]
-                # for subdoc in subdocs:
-                #     for i, mention in enumerate(subdoc):
-                #         mention_info = []
-                #         if type(mention[2]) == "str": # zero mention
-                #             mention_info.append(("", "", "PRON"))
-                #         else:
-                #             for j in range(mention[1], mention[2] + 1):
-                #                 form_lemma_upos = dataset.docs_flu[doc_i][mention[0]][j]
-                #                 mention_info.append(form_lemma_upos)
 
-                #         subdoc[i] = (*mention, mention_info)
                 clusters = merge_clusters(predict)
 
                 local_results = [[] for _ in range(len(predict))]
                 for cluster_id, cluster in enumerate(clusters):
                     for mention in cluster:
-                        mention.cluster += cluster_add
+                        mention.cluster = cluster_id + cluster_add
                         local_results[mention.sent_id].append(mention)
-                        # if isinstance(mention, ZeroMention):
 
-                        # if type(ment[2]) == "str":
-                        #     local_zero_results[ment[0]].append((ment[1], ment[2], cluster_id + cluster_add))
-                        # else:
-                        #     local_results[ment[0]].append((ment[1], ment[2], cluster_id + cluster_add))
                 cluster_add += len(clusters)
                 for i in range(len(local_results)):
-                    local_results[i] = sorted(local_results[i],
-                                              key=lambda x: (x.begin, -isinstance(x, ZeroMention), -x.end))
-                # for i in range(len(local_zero_results)):
-                #     local_zero_results[i] = sorted(local_zero_results[i])
+                    local_results[i] = sorted(local_results[i], key=lambda x: (x.begin, -isinstance(x, ZeroMention), -x.end))
 
                 results.extend(local_results)
-                # zero_results.extend(local_zero_results)
 
             path = os.path.join(self._args.logdir, f"{os.path.splitext(os.path.basename(dataset._path))[0]}.conllu")
-            dataset.save_mentions(path, results)  # , zero_results)
-            # dataset.save_mentions23(path, results)
+            dataset.save_mentions(path, results)
             if evaluate:
-                os.system(f"run ./corefud-score.sh '{dataset._path}' '{path}'")
+                os.system(f"bash ./corefud-score.sh '{dataset._path}' '{path}'")
 
 
 def main(params: list[str] | None = None) -> None:
@@ -712,8 +596,7 @@ def main(params: list[str] | None = None) -> None:
     tokenizer.add_special_tokens({"additional_special_tokens": [Dataset.TOKEN_EMPTY] +
                                                                [Dataset.TOKEN_TREEBANK.format(i) for i in
                                                                 range(len(args.treebanks))] +
-                                                               ([
-                                                                    Dataset.TOKEN_CLS] if tokenizer.cls_token_id is None and not args.treebank_id else [])})
+                                                               ([Dataset.TOKEN_CLS] if tokenizer.cls_token_id is None and not args.treebank_id else [])})
 
     if args.dev and args.treebank_id:
         print("When --treebank_id is set and you pass explicit --dev treebanks, they MUST correspond to --treebanks.")
@@ -748,9 +631,9 @@ def main(params: list[str] | None = None) -> None:
         if args.dev is not None or args.test is not None:
             os.makedirs(args.logdir, exist_ok=True)
             if args.dev is not None:
-                model.callback(0, devs, evaluate=True)
+                model.callback(devs, evaluate=True)
             if args.test is not None:
-                model.callback(0, tests, evaluate=False)
+                model.callback(tests, evaluate=False)
 
 
 if __name__ == "__main__":
