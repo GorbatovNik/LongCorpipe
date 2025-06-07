@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from clusterer import merge_clusters
+from .clusterer import merge_clusters
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -353,7 +353,7 @@ class Model(tf.keras.Model):
                                      *[tf.ragged.constant([[[0, 0]]], dtype=tf.int32, ragged_rank=1,
                                                           inner_shape=(2,))] * 2)
             self.built = True
-            self.load_weights(args.load[0])
+            self.load_weights(args.load)
 
     def crf_decode(self, logits: tf.RaggedTensor, crf_weights: tf.Tensor) -> tf.RaggedTensor:
         boundary_logits = tf.broadcast_to(self._boundary_logits,
@@ -576,11 +576,11 @@ def main(params: list[str] | None = None) -> None:
 
     # If supplied, load configuration from a trained model
     if args.load:
-        with open(os.path.join(os.path.dirname(args.load[0]), "options.json"), mode="r") as options_file:
+        with open(os.path.join(os.path.dirname(args.load), "options.json"), mode="r") as options_file:
             args = argparse.Namespace(**{k: v for k, v in json.load(options_file).items() if k in [
                 "batch_size", "depth", "encoder", "right", "segment", "seed", "treebanks", "treebank_id"]})
             args = parser.parse_args(params, namespace=args)
-        args.logdir = args.exp if args.exp else os.path.dirname(args.load[0])
+        args.logdir = args.exp if args.exp else os.path.dirname(args.load)
     else:
         raise ValueError("--load must be set.")
 
@@ -608,16 +608,16 @@ def main(params: list[str] | None = None) -> None:
     tests = [Dataset(path.replace("-train.conllu", "-test.conllu"), tokenizer, args.treebank_id * i)
              for i, path in enumerate([] if args.test is None else (args.test or args.treebanks), 1) if path]
 
-    with open(os.path.join(os.path.dirname(args.load[0]), "tags.txt"), mode="r") as tags_file:
+    with open(os.path.join(os.path.dirname(args.load), "tags.txt"), mode="r") as tags_file:
         tags = [line.rstrip("\r\n") for line in tags_file]
-    with open(os.path.join(os.path.dirname(args.load[0]), "zdeprels.txt"), mode="r") as zdeprels_file:
+    with open(os.path.join(os.path.dirname(args.load), "zdeprels.txt"), mode="r") as zdeprels_file:
         zdeprels = [line.rstrip("\r\n") for line in zdeprels_file]
 
     tags_map = {tag: i for i, tag in enumerate(tags)}
     zdeprels_map = {zdeprel: i for i, zdeprel in enumerate(zdeprels)}
 
     strategy_scope = None
-    if len(tf.config.list_physical_devices("GPU")) > 1 and len(args.load) <= 1:
+    if len(tf.config.list_physical_devices("GPU")) > 1:
         strategy_scope = tf.distribute.MirroredStrategy().scope()
     with strategy_scope or contextlib.nullcontext():
         # Create pipelines
