@@ -1,4 +1,3 @@
-import heapq
 import numpy as np
 import pymorphy2
 from collections import defaultdict, Counter
@@ -6,8 +5,7 @@ from enum import Enum
 from langdetect import detect
 from nltk.stem.snowball import SnowballStemmer
 
-TAGS_ALLOWED_FOR_REPRESENTATIVES = ("PROPN", "ADJ")
-
+TAGS_ALLOWED_FOR_REPRESENTATIVES = ("PROPN", "ADJ", "CCONJ", "INTJ", "PART", "ADP")
 
 class NormalizationType(Enum):
     CONLLU = 1
@@ -15,14 +13,14 @@ class NormalizationType(Enum):
     STEMMING = 3
 
 
-def check_if_propn(mention_info, normalization_type: NormalizationType):
+def check_if_repr(mention_info, normalization_type: NormalizationType):
     POS_tags = [tok[2] for tok in mention_info]
     if not all(t in TAGS_ALLOWED_FOR_REPRESENTATIVES for t in POS_tags):
         return None
     if "PROPN" not in POS_tags:
         return None
 
-    normalize = lambda token, lemma: lemma.lower()
+    normalize = lambda token, lemma: lemma.lower() # NormalizationType.CONLLU
     if normalization_type == NormalizationType.LEMMATIZATION:
         morph = pymorphy2.MorphAnalyzer()
         normalize = lambda token, lemma: morph.parse(token.lower())[0].normal_form
@@ -52,7 +50,7 @@ def check_if_propn(mention_info, normalization_type: NormalizationType):
 def get_repr(cluster_mentions):
     results = []
     for mention in cluster_mentions:
-        lemmas = check_if_propn(mention.info, NormalizationType.CONLLU)
+        lemmas = check_if_repr(mention.info, NormalizationType.CONLLU)
         if lemmas:
             results.append(lemmas)
 
